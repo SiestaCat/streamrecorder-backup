@@ -351,15 +351,21 @@ def is_processed(filename, folder_dest, recording_id):
         text=True,
     )
 
-    if result.returncode == 4:
+    # Exit code 3: Directory not found. Exit code 4: File not found.
+    # Both mean the file hasn't been uploaded yet.
+    if result.returncode in (3, 4):
         return False
 
     if result.returncode != 0:
         raise RuntimeError(
-            f"Recording {recording_id} | Error checking {remote_file}: {result.stderr.strip()}"
+            f"Recording {recording_id} | Error checking {remote_file}: code={result.returncode} stderr={result.stderr.strip()}"
         )
 
-    file_info = json.loads(result.stdout)
+    try:
+        file_info = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"Recording {recording_id} | Invalid JSON from rclone: {result.stdout.strip()}")
+
     exists = isinstance(file_info, dict) and file_info.get("Name") == filename and not file_info.get("IsDir", False)
 
     LOGGER.info("Recording %s | Remote file %s: %s", recording_id, "exists" if exists else "does not exist", remote_file)
