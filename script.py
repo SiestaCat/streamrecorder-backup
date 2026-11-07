@@ -19,7 +19,6 @@ from urllib.parse import unquote, urlparse
 API_URL = "https://streamrecorder.io/api/user/recordingsv2"
 COOKIE_FILE = Path("/root/streamrecorder/cookie")
 FILES_DIR = Path("/root/streamrecorder/files")
-CACHE_DIR = Path("/root/streamrecorder/cache")
 RCLONE_REMOTE = "gdrive"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
 PAGE_LIMIT = 20
@@ -335,15 +334,32 @@ def build_filename(recording, download_url, target_id):
     return f"{target_name}_{timestamp}{extension}"
 
 
-def is_processed(recording_id):
-    return (CACHE_DIR / str(recording_id)).exists()
+def is_processed(filename, folder_dest, recording_id):
+    remote_file = f"{RCLONE_REMOTE}:{folder_dest.rstrip('/')}/{filename}"
+    command = ["rclone", "lsjson", "--stat", "--files-only", remote_file]
 
+    LOGGER.info("Recording %s | Verificando archivo remoto: %s", recording_id, remote_file)
 
-def mark_processed(recording_id):
-    cache_file = CACHE_DIR / str(recording_id)
-    cache_file.write_text(f"{recording_id}\n", encoding="utf-8")
-    LOGGER.info("Recording %s | Guardado en caché: %s", recording_id, cache_file)
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
 
+    if result.returncode == 4:
+        return False
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Recording {recording_id} | Error verificando {remote_file}: {result.stderr.strip()}"
+        )
+
+    file_info = json.loads(result.stdout)
+    exists = isinstance(file_info, dict) and file_info.get("Name") == filename and not file_info.get("IsDir", False)
+
+    LOGGER.info("Recording %s | Archivo remoto %s: %s", recording_id, "existente" if exists else "inexistente", remote_file)
+    return exists
 
 def download_file(download_url, destination, recording_id):
     partial = Path(f"{destination}.part")
@@ -412,10 +428,6 @@ def process_recording(recording, target_id, folder_dest):
         LOGGER.warning("Target %s | Registro sin id; se omite", target_id)
         return
 
-    if is_processed(recording_id):
-        LOGGER.info("Recording %s | Ya procesado; se omite", recording_id)
-        return
-
     sources = recording.get("sources")
     if not isinstance(sources, list) or not sources:
         LOGGER.warning("Recording %s | No contiene sources; se omite por ahora", recording_id)
@@ -429,6 +441,10 @@ def process_recording(recording, target_id, folder_dest):
     filename = build_filename(recording, download_url, target_id)
     local_file = FILES_DIR / filename
 
+    if is_processed(filename, folder_dest, recording_id):
+        LOGGER.info("Recording %s | Archivo ya existente en Google Drive; se omite: %s", recording_id, filename)
+        return
+
     LOGGER.info(
         "Recording %s | Procesando | target=%s target_name=%s recorded_at=%s archivo=%s",
         recording_id,
@@ -440,7 +456,6 @@ def process_recording(recording, target_id, folder_dest):
 
     download_file(download_url, local_file, recording_id)
     upload_file(local_file, folder_dest, recording_id)
-    mark_processed(recording_id)
 
     try:
         local_file.unlink()
@@ -542,7 +557,6 @@ def parse_args():
 
 def validate_environment():
     FILES_DIR.mkdir(parents=True, exist_ok=True)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     if not COOKIE_FILE.is_file():
         raise RuntimeError(f"No existe el archivo de cookies: {COOKIE_FILE}")
@@ -555,7 +569,6 @@ def validate_environment():
 
     LOGGER.info("Cookie: %s", COOKIE_FILE)
     LOGGER.info("Directorio de descargas: %s", FILES_DIR)
-    LOGGER.info("Directorio de caché: %s", CACHE_DIR)
     LOGGER.info("curl: %s", shutil.which("curl"))
     LOGGER.info("rclone: %s", shutil.which("rclone"))
 
