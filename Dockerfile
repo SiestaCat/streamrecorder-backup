@@ -6,6 +6,7 @@ COPY script.py /script.py
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 RUN chmod +x /script.sh
+RUN touch /root/streamrecorder/cookie
 
 EXPOSE 9000
 
