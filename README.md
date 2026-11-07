@@ -8,6 +8,14 @@ Docker build
 docker build -t streamrecorderio-backup .
 ```
 
+Volumes:
+
+```
+/root/.config
+/root/streamrecorder/files
+/root/streamrecorder/cookie (file)
+```
+
 Save cookes file from alpine easypanel web interface:
 
 ```bash
