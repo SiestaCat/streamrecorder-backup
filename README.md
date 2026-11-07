@@ -8,6 +8,8 @@ Docker build
 docker build -t streamrecorderio-backup .
 ```
 
+From container, run `rclone config` and add a new remote with name remote
+
 Volumes:
 
 ```
@@ -16,7 +18,7 @@ Volumes:
 /root/streamrecorder/cookie (file)
 ```
 
-Save cookes file from alpine easypanel web interface:
+Save cookes file from container, copy curl request from browser and paste:
 
 ```bash
 cat > /root/streamrecorder/cookie <<'EOF'

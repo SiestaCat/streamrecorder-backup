@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlparse
 API_URL = "https://streamrecorder.io/api/user/recordingsv2"
 COOKIE_FILE = Path("/root/streamrecorder/cookie")
 FILES_DIR = Path("/root/streamrecorder/files")
-RCLONE_REMOTE = "gdrive"
+RCLONE_REMOTE = "remote"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36 Edg/152.0.0.0"
 PAGE_LIMIT = 20
 INTERVAL_SECONDS = 600
@@ -39,27 +39,27 @@ def setup_logging():
 
 
 def handle_signal(signum, _frame):
-    LOGGER.info("Señal %s recibida. Se detendrá el script al terminar la operación actual.", signum)
+    LOGGER.info("Signal %s received. The script will stop after the current operation finishes.", signum)
     STOP.set()
 
 
 def load_cookie():
     cookie = COOKIE_FILE.read_text(encoding="utf-8").strip()
     if not cookie:
-        raise RuntimeError(f"El archivo de cookie está vacío: {COOKIE_FILE}")
+        raise RuntimeError(f"The cookie file is empty: {COOKIE_FILE}")
 
     if cookie.lower().startswith("cookie:"):
         cookie = cookie.split(":", 1)[1].strip()
 
     if "=" not in cookie:
-        raise RuntimeError(f"El contenido de {COOKIE_FILE} no parece una cookie válida NAME=VALUE")
+        raise RuntimeError(f"The content of {COOKIE_FILE} does not look like a valid NAME=VALUE cookie")
 
     return cookie
 
 
 def log_multiline(level, prefix, text):
     if not text:
-        LOGGER.log(level, "%s | <vacío>", prefix)
+        LOGGER.log(level, "%s | <empty>", prefix)
         return
 
     for line in text.splitlines():
@@ -67,7 +67,7 @@ def log_multiline(level, prefix, text):
 
 
 def run_command(command, description, log_output=True, capture_output=False):
-    LOGGER.info("%s | Comando: %s", description, shlex.join(command))
+    LOGGER.info("%s | Command: %s", description, shlex.join(command))
     started = time.monotonic()
 
     process = subprocess.Popen(
@@ -121,7 +121,7 @@ def run_command(command, description, log_output=True, capture_output=False):
     if not capture_output or returncode != 0:
         LOGGER.log(
             logging.ERROR if returncode != 0 else logging.INFO,
-            "%s | Finalizado | exit_code=%s duración=%.3fs",
+            "%s | Finished | exit_code=%s duration=%.3fs",
             description,
             returncode,
             elapsed,
@@ -135,11 +135,11 @@ def run_command(command, description, log_output=True, capture_output=False):
             log_multiline(logging.ERROR, f"{description} | stderr", stderr)
         elif stderr:
             LOGGER.error(
-                "%s | El comando terminó con errores; stderr capturado arriba",
+                "%s | The command finished with errors; stderr captured above",
                 description,
             )
 
-        raise RuntimeError(f"{description} terminó con código {returncode}")
+        raise RuntimeError(f"{description} finished with code {returncode}")
 
     return stdout
 
@@ -188,7 +188,7 @@ def fetch_recordings(target_id):
         ]
 
         description = f"API target={target_id} offset={offset}"
-        LOGGER.info("%s | Comando: %s", description, shlex.join(command))
+        LOGGER.info("%s | Command: %s", description, shlex.join(command))
         started = time.monotonic()
 
         try:
@@ -209,16 +209,16 @@ def fetch_recordings(target_id):
                     curl_meta[key] = value
 
             LOGGER.info(
-                "%s | curl finalizado | exit_code=%s duración_python=%.3fs http_code=%s url_effective=%s content_type=%s time_total=%s size_download=%s num_redirects=%s",
+                "%s | curl finished | exit_code=%s python_duration=%.3fs http_code=%s url_effective=%s content_type=%s time_total=%s size_download=%s num_redirects=%s",
                 description,
                 result.returncode,
                 elapsed,
-                curl_meta.get("http_code", "desconocido"),
-                curl_meta.get("url_effective", "desconocida"),
-                curl_meta.get("content_type", "desconocido"),
-                curl_meta.get("time_total", "desconocido"),
-                curl_meta.get("size_download", "desconocido"),
-                curl_meta.get("num_redirects", "desconocido"),
+                curl_meta.get("http_code", "unknown"),
+                curl_meta.get("url_effective", "unknown"),
+                curl_meta.get("content_type", "unknown"),
+                curl_meta.get("time_total", "unknown"),
+                curl_meta.get("size_download", "unknown"),
+                curl_meta.get("num_redirects", "unknown"),
             )
 
             verbose_lines = result.stderr.splitlines()
@@ -233,7 +233,7 @@ def fetch_recordings(target_id):
                     LOGGER.info("%s | request header (-b) | %s", description, cookie_header)
             else:
                 LOGGER.warning(
-                    "%s | request header (-b) | curl no envió ninguna cabecera Cookie para esta URL usando el contenido de %s",
+                    "%s | request header (-b) | curl did not send any Cookie header for this URL using the content of %s",
                     description,
                     COOKIE_FILE,
                 )
@@ -248,8 +248,8 @@ def fetch_recordings(target_id):
 
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"{description} | curl terminó con código {result.returncode} | "
-                    f"url={url} | url_effective={curl_meta.get('url_effective', 'desconocida')}"
+                    f"{description} | curl finished with code {result.returncode} | "
+                    f"url={url} | url_effective={curl_meta.get('url_effective', 'unknown')}"
                 )
 
             http_code_text = curl_meta.get("http_code", "0")
@@ -261,14 +261,14 @@ def fetch_recordings(target_id):
             if not 200 <= http_code < 300:
                 raise RuntimeError(
                     f"{description} | HTTP {http_code_text} | "
-                    f"url={url} | url_effective={curl_meta.get('url_effective', 'desconocida')}"
+                    f"url={url} | url_effective={curl_meta.get('url_effective', 'unknown')}"
                 )
 
             try:
                 payload = json.loads(body)
             except json.JSONDecodeError as exc:
                 raise RuntimeError(
-                    f"{description} | La API devolvió JSON inválido: {exc} | "
+                    f"{description} | The API returned invalid JSON: {exc} | "
                     f"url={url} | body_length={len(body)}"
                 ) from exc
         finally:
@@ -278,30 +278,30 @@ def fetch_recordings(target_id):
         page = payload.get("data")
         if not isinstance(page, list):
             LOGGER.error(
-                "Target %s | Respuesta JSON sin 'data' válido | claves=%s",
+                "Target %s | JSON response without a valid 'data' field | keys=%s",
                 target_id,
                 list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__,
             )
-            raise RuntimeError(f"La respuesta de target {target_id} no contiene un campo 'data' válido")
+            raise RuntimeError(f"The response from target {target_id} does not contain a valid 'data' field")
 
         LOGGER.info(
-            "Target %s | Página recibida | offset=%s registros=%s count=%s count_total=%s",
+            "Target %s | Page received | offset=%s records=%s count=%s count_total=%s",
             target_id,
             offset,
             len(page),
-            payload.get("count", "desconocido"),
-            payload.get("count_total", "desconocido"),
+            payload.get("count", "unknown"),
+            payload.get("count_total", "unknown"),
         )
 
         if not page:
-            LOGGER.info("Target %s | Paginación terminada: página vacía en offset=%s", target_id, offset)
+            LOGGER.info("Target %s | Pagination finished: empty page at offset=%s", target_id, offset)
             break
 
         recordings.extend(page)
         offset += len(page)
-        LOGGER.info("Target %s | Siguiente página | offset=%s", target_id, offset)
+        LOGGER.info("Target %s | Next page | offset=%s", target_id, offset)
 
-    LOGGER.info("Target %s | Total de registros obtenidos: %s", target_id, len(recordings))
+    LOGGER.info("Target %s | Total records fetched: %s", target_id, len(recordings))
     return recordings
 
 
@@ -316,19 +316,19 @@ def build_filename(recording, download_url, target_id):
     target_name = sanitize_target_name(recording.get("target_name"), target_id)
     recorded_at = recording.get("recorded_at")
     if not recorded_at:
-        raise RuntimeError("El registro no contiene 'recorded_at'")
+        raise RuntimeError("The record does not contain 'recorded_at'")
 
     try:
         parsed_date = datetime.fromisoformat(str(recorded_at).replace("Z", "+00:00"))
     except ValueError as exc:
-        raise RuntimeError(f"recorded_at no tiene un formato ISO válido: {recorded_at}") from exc
+        raise RuntimeError(f"recorded_at does not have a valid ISO format: {recorded_at}") from exc
 
     timestamp = parsed_date.strftime("%Y-%m-%d-%H-%M")
     url_path = unquote(urlparse(download_url).path)
     extension = Path(url_path).suffix
 
     if not extension or len(extension) > 15:
-        LOGGER.warning("No se pudo detectar una extensión fiable en la URL; se usará .bin")
+        LOGGER.warning("Could not detect a reliable extension in the URL; .bin will be used")
         extension = ".bin"
 
     return f"{target_name}_{timestamp}{extension}"
@@ -338,7 +338,7 @@ def is_processed(filename, folder_dest, recording_id):
     remote_file = f"{RCLONE_REMOTE}:{folder_dest.rstrip('/')}/{filename}"
     command = ["rclone", "lsjson", "--stat", "--files-only", remote_file]
 
-    LOGGER.info("Recording %s | Verificando archivo remoto: %s", recording_id, remote_file)
+    LOGGER.info("Recording %s | Checking remote file: %s", recording_id, remote_file)
 
     result = subprocess.run(
         command,
@@ -352,13 +352,13 @@ def is_processed(filename, folder_dest, recording_id):
 
     if result.returncode != 0:
         raise RuntimeError(
-            f"Recording {recording_id} | Error verificando {remote_file}: {result.stderr.strip()}"
+            f"Recording {recording_id} | Error checking {remote_file}: {result.stderr.strip()}"
         )
 
     file_info = json.loads(result.stdout)
     exists = isinstance(file_info, dict) and file_info.get("Name") == filename and not file_info.get("IsDir", False)
 
-    LOGGER.info("Recording %s | Archivo remoto %s: %s", recording_id, "existente" if exists else "inexistente", remote_file)
+    LOGGER.info("Recording %s | Remote file %s: %s", recording_id, "exists" if exists else "does not exist", remote_file)
     return exists
 
 def download_file(download_url, destination, recording_id):
@@ -366,19 +366,19 @@ def download_file(download_url, destination, recording_id):
 
     if destination.exists():
         LOGGER.info(
-            "Recording %s | El archivo local ya existe; se reutilizará sin descargar de nuevo: %s",
+            "Recording %s | Local file already exists; it will be reused without downloading again: %s",
             recording_id,
             destination,
         )
         return
 
     LOGGER.info(
-        "Recording %s | Descargando a %s%s",
+        "Recording %s | Downloading to %s%s",
         recording_id,
         partial,
-        f" | reanudando desde {partial.stat().st_size} bytes" if partial.exists() else "",
+        f" | resuming from {partial.stat().st_size} bytes" if partial.exists() else "",
     )
-    LOGGER.info("Recording %s | URL descarga exacta: %s", recording_id, download_url)
+    LOGGER.info("Recording %s | Exact download URL: %s", recording_id, download_url)
 
     command = [
         "curl",
@@ -402,9 +402,9 @@ def download_file(download_url, destination, recording_id):
         download_url,
     ]
 
-    run_command(command, f"Descarga recording={recording_id}")
+    run_command(command, f"Downloading recording={recording_id}")
     partial.replace(destination)
-    LOGGER.info("Recording %s | Descarga completada: %s (%s bytes)", recording_id, destination, destination.stat().st_size)
+    LOGGER.info("Recording %s | Download completed: %s (%s bytes)", recording_id, destination, destination.stat().st_size)
 
 
 def upload_file(local_file, folder_dest, recording_id):
@@ -416,37 +416,37 @@ def upload_file(local_file, folder_dest, recording_id):
             f"{RCLONE_REMOTE}:{folder_dest}",
             "-P",
         ],
-        f"Subida rclone recording={recording_id}",
+        f"Rclone upload recording={recording_id}",
     )
-    LOGGER.info("Recording %s | Subida a Google Drive completada", recording_id)
+    LOGGER.info("Recording %s | Rclone upload completed", recording_id)
     return output
 
 
 def process_recording(recording, target_id, folder_dest):
     recording_id = recording.get("id")
     if recording_id is None:
-        LOGGER.warning("Target %s | Registro sin id; se omite", target_id)
+        LOGGER.warning("Target %s | Record without id; skipping", target_id)
         return
 
     sources = recording.get("sources")
     if not isinstance(sources, list) or not sources:
-        LOGGER.warning("Recording %s | No contiene sources; se omite por ahora", recording_id)
+        LOGGER.warning("Recording %s | Does not contain sources; skipping for now", recording_id)
         return
 
     download_url = sources[0].get("downloadlink") if isinstance(sources[0], dict) else None
     if not download_url:
-        LOGGER.warning("Recording %s | sources[0] no contiene downloadlink; se omite por ahora", recording_id)
+        LOGGER.warning("Recording %s | sources[0] does not contain downloadlink; skipping for now", recording_id)
         return
 
     filename = build_filename(recording, download_url, target_id)
     local_file = FILES_DIR / filename
 
     if is_processed(filename, folder_dest, recording_id):
-        LOGGER.info("Recording %s | Archivo ya existente en Google Drive; se omite: %s", recording_id, filename)
+        LOGGER.info("Recording %s | File already exists on remote; skipping: %s", recording_id, filename)
         return
 
     LOGGER.info(
-        "Recording %s | Procesando | target=%s target_name=%s recorded_at=%s archivo=%s",
+        "Recording %s | Processing | target=%s target_name=%s recorded_at=%s file=%s",
         recording_id,
         target_id,
         recording.get("target_name"),
@@ -459,15 +459,15 @@ def process_recording(recording, target_id, folder_dest):
 
     try:
         local_file.unlink()
-        LOGGER.info("Recording %s | Archivo local eliminado tras subida correcta: %s", recording_id, local_file)
+        LOGGER.info("Recording %s | Local file deleted after successful upload: %s", recording_id, local_file)
     except FileNotFoundError:
-        LOGGER.warning("Recording %s | El archivo local ya no existe: %s", recording_id, local_file)
+        LOGGER.warning("Recording %s | Local file no longer exists: %s", recording_id, local_file)
     except OSError as exc:
-        LOGGER.error("Recording %s | No se pudo eliminar %s: %s", recording_id, local_file, exc)
+        LOGGER.error("Recording %s | Could not delete %s: %s", recording_id, local_file, exc)
 
 
 def process_target(target_id, folder_dest):
-    LOGGER.info("Target %s | Inicio de ciclo", target_id)
+    LOGGER.info("Target %s | Cycle start", target_id)
 
     try:
         recordings = fetch_recordings(target_id)
@@ -478,11 +478,11 @@ def process_target(target_id, folder_dest):
             try:
                 process_recording(recording, target_id, folder_dest)
             except Exception:
-                LOGGER.exception("Target %s | Error procesando recording id=%s", target_id, recording.get("id"))
+                LOGGER.exception("Target %s | Error processing recording id=%s", target_id, recording.get("id"))
     except Exception:
-        LOGGER.exception("Target %s | Error obteniendo/procesando registros", target_id)
+        LOGGER.exception("Target %s | Error fetching/processing records", target_id)
 
-    LOGGER.info("Target %s | Fin de ciclo", target_id)
+    LOGGER.info("Target %s | Cycle end", target_id)
 
 
 def target_worker(target_id, folder_dest):
@@ -499,7 +499,7 @@ def target_worker(target_id, folder_dest):
         wait_seconds = max(0, INTERVAL_SECONDS - elapsed)
         if wait_seconds > 0:
             LOGGER.info(
-                "Target %s | Ciclo tardó %.1f s; siguiente ejecución en %.1f s",
+                "Target %s | Cycle took %.1f s; next execution in %.1f s",
                 target_id,
                 elapsed,
                 wait_seconds,
@@ -507,13 +507,13 @@ def target_worker(target_id, folder_dest):
             STOP.wait(wait_seconds)
         else:
             LOGGER.info(
-                "Target %s | Ciclo tardó %.1f s (> %s s); se inicia el siguiente sin solapar",
+                "Target %s | Cycle took %.1f s (> %s s); starting the next one without overlapping",
                 target_id,
                 elapsed,
                 INTERVAL_SECONDS,
             )
 
-    LOGGER.info("Target %s | Worker detenido", target_id)
+    LOGGER.info("Target %s | Worker stopped", target_id)
 
 
 def monitor_rclone(folder_dest):
@@ -522,7 +522,7 @@ def monitor_rclone(folder_dest):
         try:
             output = run_command(
                 ["rclone", "-vv", "lsf", f"{RCLONE_REMOTE}:{folder_dest}", "--files-only"],
-                "Monitorización de Google Drive",
+                "Rclone monitoring",
                 log_output=False,
                 capture_output=True,
             )
@@ -530,27 +530,27 @@ def monitor_rclone(folder_dest):
             lines = [line for line in output.splitlines() if line.strip()]
             # Count lines (rclone lsf has no header)
             file_count = len(lines)
-            LOGGER.info("Se han encontrado %s archivos en la carpeta de Google Drive.", max(0, file_count))
+            LOGGER.info("Found %s files in the rclone folder.", max(0, file_count))
         except Exception as e:
-             LOGGER.exception("Error en la monitorización de Google Drive: %s", e)
+             LOGGER.exception("Error in rclone monitoring: %s", e)
         STOP.wait(10)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Descarga recordings de streamrecorder.io y los sube a Google Drive."
+        description="Downloads recordings from streamrecorder.io and uploads them to rclone."
     )
-    parser.add_argument("target_ids", help="IDs separados por comas, por ejemplo: 123,5454,343")
-    parser.add_argument("FOLDER_DEST", help="Ruta de la carpeta destino del remoto rclone")
+    parser.add_argument("target_ids", help="Comma-separated IDs, for example: 123,5454,343")
+    parser.add_argument("FOLDER_DEST", help="Destination folder path on the rclone remote")
     args = parser.parse_args()
 
     try:
         target_ids = [int(value.strip()) for value in args.target_ids.split(",") if value.strip()]
     except ValueError as exc:
-        parser.error(f"target_ids debe contener únicamente enteros separados por comas: {exc}")
+        parser.error(f"target_ids must contain only comma-separated integers: {exc}")
 
     if not target_ids:
-        parser.error("Debes indicar al menos un target_id")
+        parser.error("You must provide at least one target_id")
 
     return target_ids, args.FOLDER_DEST
 
@@ -559,16 +559,16 @@ def validate_environment():
     FILES_DIR.mkdir(parents=True, exist_ok=True)
 
     if not COOKIE_FILE.is_file():
-        raise RuntimeError(f"No existe el archivo de cookies: {COOKIE_FILE}")
+        raise RuntimeError(f"Cookie file does not exist: {COOKIE_FILE}")
 
     if not shutil.which("curl"):
-        raise RuntimeError("No se encuentra 'curl' en PATH")
+        raise RuntimeError("'curl' not found in PATH")
 
     if not shutil.which("rclone"):
-        raise RuntimeError("No se encuentra 'rclone' en PATH")
+        raise RuntimeError("'rclone' not found in PATH")
 
     LOGGER.info("Cookie: %s", COOKIE_FILE)
-    LOGGER.info("Directorio de descargas: %s", FILES_DIR)
+    LOGGER.info("Downloads directory: %s", FILES_DIR)
     LOGGER.info("curl: %s", shutil.which("curl"))
     LOGGER.info("rclone: %s", shutil.which("rclone"))
 
@@ -583,10 +583,10 @@ def main():
     try:
         validate_environment()
     except Exception:
-        LOGGER.exception("Entorno inválido")
+        LOGGER.exception("Invalid environment")
         return 1
 
-    LOGGER.info("Iniciando servicio | targets=%s | intervalo=%ss", target_ids, INTERVAL_SECONDS)
+    LOGGER.info("Starting service | targets=%s | interval=%ss", target_ids, INTERVAL_SECONDS)
 
     workers = []
     for target_id in target_ids:
@@ -608,7 +608,7 @@ def main():
     for worker in workers:
         worker.join()
 
-    LOGGER.info("Servicio detenido")
+    LOGGER.info("Service stopped")
     return 0
 
 
