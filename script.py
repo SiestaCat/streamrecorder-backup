@@ -144,136 +144,140 @@ def run_command(command, description, log_output=True, capture_output=False):
     return stdout
 
 
+def execute_api_request(url, description, target_id):
+    cookie = load_cookie()
+    LOGGER.info(
+        "Target %s | API | cookie_file=%s user_agent=%s",
+        target_id,
+        COOKIE_FILE,
+        USER_AGENT,
+    )
+    LOGGER.info("Target %s | API | -b %s", target_id, cookie)
+
+    with tempfile.NamedTemporaryFile(prefix=f"streamrecorder-{target_id}-", suffix=".body", delete=False) as body_tmp:
+        body_path = Path(body_tmp.name)
+    with tempfile.NamedTemporaryFile(prefix=f"streamrecorder-{target_id}-", suffix=".headers", delete=False) as headers_tmp:
+        headers_path = Path(headers_tmp.name)
+
+    command = [
+        "curl",
+        "-sS",
+        "-v",
+        "-L",
+        "-b",
+        cookie,
+        "-H",
+        f"user-agent: {USER_AGENT}",
+        "--dump-header",
+        str(headers_path),
+        "--output",
+        str(body_path),
+        "--write-out",
+        "http_code=%{http_code}\nurl_effective=%{url_effective}\ncontent_type=%{content_type}\ntime_total=%{time_total}\nsize_download=%{size_download}\nnum_redirects=%{num_redirects}",
+        url,
+    ]
+
+    LOGGER.info("%s | Command: %s", description, shlex.join(command))
+    started = time.monotonic()
+
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        elapsed = time.monotonic() - started
+        body = body_path.read_text(encoding="utf-8", errors="replace")
+        headers = headers_path.read_text(encoding="utf-8", errors="replace")
+        curl_meta = {}
+
+        for line in result.stdout.splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                curl_meta[key] = value
+
+        LOGGER.info(
+            "%s | curl finished | exit_code=%s python_duration=%.3fs http_code=%s url_effective=%s content_type=%s time_total=%s size_download=%s num_redirects=%s",
+            description,
+            result.returncode,
+            elapsed,
+            curl_meta.get("http_code", "unknown"),
+            curl_meta.get("url_effective", "unknown"),
+            curl_meta.get("content_type", "unknown"),
+            curl_meta.get("time_total", "unknown"),
+            curl_meta.get("size_download", "unknown"),
+            curl_meta.get("num_redirects", "unknown"),
+        )
+
+        verbose_lines = result.stderr.splitlines()
+        cookie_headers = [
+            line[2:]
+            for line in verbose_lines
+            if line.lower().startswith("> cookie:")
+        ]
+
+        if cookie_headers:
+            for cookie_header in cookie_headers:
+                LOGGER.info("%s | request header (-b) | %s", description, cookie_header)
+        else:
+            LOGGER.warning(
+                "%s | request header (-b) | curl did not send any Cookie header for this URL using the content of %s",
+                description,
+                COOKIE_FILE,
+            )
+
+        if result.returncode != 0:
+            error_lines = [line for line in verbose_lines if not line.lower().startswith("> cookie:")]
+            if error_lines:
+                log_multiline(logging.ERROR, f"{description} | curl stderr", "\n".join(error_lines))
+
+        log_multiline(logging.INFO, f"{description} | response headers", headers.strip())
+        log_multiline(logging.INFO, f"{description} | response body", body)
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"{description} | curl finished with code {result.returncode} | "
+                f"url={url} | url_effective={curl_meta.get('url_effective', 'unknown')}"
+            )
+
+        http_code_text = curl_meta.get("http_code", "0")
+        try:
+            http_code = int(http_code_text)
+        except ValueError:
+            http_code = 0
+
+        if not 200 <= http_code < 300:
+            raise RuntimeError(
+                f"{description} | HTTP {http_code_text} | "
+                f"url={url} | url_effective={curl_meta.get('url_effective', 'unknown')}"
+            )
+
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"{description} | The API returned invalid JSON: {exc} | "
+                f"url={url} | body_length={len(body)}"
+            ) from exc
+
+        return payload
+
+    finally:
+        body_path.unlink(missing_ok=True)
+        headers_path.unlink(missing_ok=True)
+
+
 def fetch_recordings(target_id):
     recordings = []
     offset = 0
 
     while not STOP.is_set():
         url = f"{API_URL}?targetid={target_id}&offset={offset}&limit={PAGE_LIMIT}&sortby=id&sortdir=desc"
-        LOGGER.info(
-            "Target %s | API | GET %s",
-            target_id,
-            url,
-        )
-        cookie = load_cookie()
-        LOGGER.info(
-            "Target %s | API | cookie_file=%s user_agent=%s",
-            target_id,
-            COOKIE_FILE,
-            USER_AGENT,
-        )
-        LOGGER.info("Target %s | API | -b %s", target_id, cookie)
-
-        with tempfile.NamedTemporaryFile(prefix=f"streamrecorder-{target_id}-", suffix=".body", delete=False) as body_tmp:
-            body_path = Path(body_tmp.name)
-        with tempfile.NamedTemporaryFile(prefix=f"streamrecorder-{target_id}-", suffix=".headers", delete=False) as headers_tmp:
-            headers_path = Path(headers_tmp.name)
-
-        command = [
-            "curl",
-            "-sS",
-            "-v",
-            "-L",
-            "-b",
-            cookie,
-            "-H",
-            f"user-agent: {USER_AGENT}",
-            "--dump-header",
-            str(headers_path),
-            "--output",
-            str(body_path),
-            "--write-out",
-            "http_code=%{http_code}\nurl_effective=%{url_effective}\ncontent_type=%{content_type}\ntime_total=%{time_total}\nsize_download=%{size_download}\nnum_redirects=%{num_redirects}",
-            url,
-        ]
-
         description = f"API target={target_id} offset={offset}"
-        LOGGER.info("%s | Command: %s", description, shlex.join(command))
-        started = time.monotonic()
-
-        try:
-            result = subprocess.run(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            elapsed = time.monotonic() - started
-            body = body_path.read_text(encoding="utf-8", errors="replace")
-            headers = headers_path.read_text(encoding="utf-8", errors="replace")
-            curl_meta = {}
-
-            for line in result.stdout.splitlines():
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    curl_meta[key] = value
-
-            LOGGER.info(
-                "%s | curl finished | exit_code=%s python_duration=%.3fs http_code=%s url_effective=%s content_type=%s time_total=%s size_download=%s num_redirects=%s",
-                description,
-                result.returncode,
-                elapsed,
-                curl_meta.get("http_code", "unknown"),
-                curl_meta.get("url_effective", "unknown"),
-                curl_meta.get("content_type", "unknown"),
-                curl_meta.get("time_total", "unknown"),
-                curl_meta.get("size_download", "unknown"),
-                curl_meta.get("num_redirects", "unknown"),
-            )
-
-            verbose_lines = result.stderr.splitlines()
-            cookie_headers = [
-                line[2:]
-                for line in verbose_lines
-                if line.lower().startswith("> cookie:")
-            ]
-
-            if cookie_headers:
-                for cookie_header in cookie_headers:
-                    LOGGER.info("%s | request header (-b) | %s", description, cookie_header)
-            else:
-                LOGGER.warning(
-                    "%s | request header (-b) | curl did not send any Cookie header for this URL using the content of %s",
-                    description,
-                    COOKIE_FILE,
-                )
-
-            if result.returncode != 0:
-                error_lines = [line for line in verbose_lines if not line.lower().startswith("> cookie:")]
-                if error_lines:
-                    log_multiline(logging.ERROR, f"{description} | curl stderr", "\n".join(error_lines))
-
-            log_multiline(logging.INFO, f"{description} | response headers", headers.strip())
-            log_multiline(logging.INFO, f"{description} | response body", body)
-
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"{description} | curl finished with code {result.returncode} | "
-                    f"url={url} | url_effective={curl_meta.get('url_effective', 'unknown')}"
-                )
-
-            http_code_text = curl_meta.get("http_code", "0")
-            try:
-                http_code = int(http_code_text)
-            except ValueError:
-                http_code = 0
-
-            if not 200 <= http_code < 300:
-                raise RuntimeError(
-                    f"{description} | HTTP {http_code_text} | "
-                    f"url={url} | url_effective={curl_meta.get('url_effective', 'unknown')}"
-                )
-
-            try:
-                payload = json.loads(body)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"{description} | The API returned invalid JSON: {exc} | "
-                    f"url={url} | body_length={len(body)}"
-                ) from exc
-        finally:
-            body_path.unlink(missing_ok=True)
-            headers_path.unlink(missing_ok=True)
+        
+        LOGGER.info("Target %s | API | GET %s", target_id, url)
+        payload = execute_api_request(url, description, target_id)
 
         page = payload.get("data")
         if not isinstance(page, list):
@@ -516,7 +520,27 @@ def target_worker(target_id, folder_dest):
     LOGGER.info("Target %s | Worker stopped", target_id)
 
 
-def monitor_rclone(folder_dest):
+def get_total_recordings_count(target_id):
+    url = f"{API_URL}?targetid={target_id}&offset=0&limit=1&sortby=id&sortdir=desc"
+    description = f"API total count target={target_id}"
+    try:
+        payload = execute_api_request(url, description, target_id)
+        count_total = payload.get("count_total")
+        if count_total is not None:
+            return int(count_total)
+        return 0
+    except Exception as e:
+        LOGGER.error("Target %s | Failed to get total count: %s", target_id, e)
+        return 0
+
+
+def get_local_files_count():
+    if not FILES_DIR.exists():
+        return 0
+    return sum(1 for f in FILES_DIR.iterdir() if f.is_file() and not f.name.endswith(".part"))
+
+
+def monitor_rclone(target_ids, folder_dest):
     threading.current_thread().name = "rclone-monitor"
     while not STOP.is_set():
         try:
@@ -526,14 +550,38 @@ def monitor_rclone(folder_dest):
                 log_output=False,
                 capture_output=True,
             )
-            # Remove empty lines
+            
             lines = [line for line in output.splitlines() if line.strip()]
-            # Count lines (rclone lsf has no header)
-            file_count = len(lines)
-            LOGGER.info("Found %s files in the rclone folder.", max(0, file_count))
+            remote_count = max(0, len(lines))
+
+            total_streamrecorder = 0
+            for target_id in target_ids:
+                if STOP.is_set():
+                    break
+                total_streamrecorder += get_total_recordings_count(target_id)
+            
+            if STOP.is_set():
+                break
+
+            local_count = get_local_files_count()
+
+            pending_total = max(0, total_streamrecorder - remote_count)
+            pending_download = max(0, pending_total - local_count)
+
+            LOGGER.info(
+                "Monitor Status | Streamrecorder total: %s | Remote files: %s | Local files (pending upload): %s | Pending download: %s | Total left to upload: %s",
+                total_streamrecorder,
+                remote_count,
+                local_count,
+                pending_download,
+                pending_total
+            )
+
         except Exception as e:
              LOGGER.exception("Error in rclone monitoring: %s", e)
-        STOP.wait(10)
+             
+        # Wait 60 seconds between monitor checks to avoid spamming API limits
+        STOP.wait(60)
 
 
 def parse_args():
@@ -597,9 +645,10 @@ def main():
         )
         worker.start()
         workers.append(worker)
+        
     monitor_worker = threading.Thread(
         target=monitor_rclone,
-        args=(folder_dest,),
+        args=(target_ids, folder_dest),
         daemon=False,
     )
     monitor_worker.start()
