@@ -11,7 +11,7 @@ docker build -t streamrecorderio-backup .
 Volumes:
 
 ```
-/root/.config
+/root/.config/rclone
 /root/streamrecorder/files
 /root/streamrecorder/cookie (file)
 ```
